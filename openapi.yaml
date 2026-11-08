@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: Skytech Muse Device API
+  title: Skytech Voice Device API
   version: "1.0"
   description: |
     Device-facing contract for the Skytech subscription platform.

@@ -7,6 +7,10 @@ not to any single firmware image.
 
 First public release of the device integration contract.
 
+Published as `skytech-voice-device-sdk`. The SDK is an independent Skytech product and is
+not affiliated with or endorsed by Meta; "Muse" is used descriptively to identify the
+gadgets it is compatible with. See `TRADEMARK.md`.
+
 **Speech**
 - `POST /v1/tts` — JSON (`text` / `input` / `kind` / `voice` / `style` / `speed` /
   `response_format` / `sample_rate`) or raw `text/plain`.

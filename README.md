@@ -1,7 +1,13 @@
-# Muse Device SDK
+# Skytech Voice Device SDK
 
-Public integration contract for connecting a Muse gadget to the **Skytech subscription
+Device integration contract for **Muse gadgets** talking to the **Skytech subscription
 platform** — entitlement, voice profile, text-to-speech and account binding.
+
+> **Independent integration.** This SDK is built and published by Skytech Creations
+> Thailand Co., Ltd. It is **not made by, affiliated with, endorsed by, or certified by
+> Meta**. The name "Muse" is used only to say what this software is compatible with.
+> Muse pairing uses the end user's own Muse account and their own Muse SDK token, under
+> Meta's personal-use terms. See [`TRADEMARK.md`](TRADEMARK.md).
 
 This repository contains **only the device-facing contract**. It is what a firmware or
 SDK engineer needs in order to make a gadget speak through
@@ -20,10 +26,6 @@ schema, no deployment scripts and no provider credentials.
 A Muse gadget is a screen-and-voice device: the Muse app handles the conversation, and
 this platform supplies the *voice* — the audio that comes back out of the speaker — plus
 the account, quota and binding that decide whether that voice is available.
-
-This project is an independent integration. It is **not made by, affiliated with, or
-endorsed by Meta**. Muse pairing uses the end user's own Muse account and their own
-Muse SDK token, under Meta's personal-use terms.
 
 ---
 
@@ -168,6 +170,7 @@ the support call this design exists to prevent.
 | [`ERRORS.md`](ERRORS.md) | Status codes, the 402 body, and the required firmware behaviour |
 | [`openapi.yaml`](openapi.yaml) | Machine-readable description of the device API |
 | [`examples/`](examples/) | `curl` walkthrough and a minimal ESP-IDF TTS call |
+| [`TRADEMARK.md`](TRADEMARK.md) | Naming and trademark statement |
 | [`CHANGELOG.md`](CHANGELOG.md) | Contract changes |
 
 ---
