@@ -1,0 +1,605 @@
+openapi: 3.0.3
+info:
+  title: Skytech Muse Device API
+  version: "1.0"
+  description: |
+    Device-facing contract for the Skytech subscription platform.
+
+    A gadget authenticates with its device key (`mk_…`) and uses these endpoints to read
+    its entitlement, read the account's voice profile, and turn reply text into audio.
+
+    Account creation, gadget claiming, billing and admin operations are portal-only and are
+    deliberately absent from this document.
+  contact:
+    name: Skytech Creations Thailand Co., Ltd.
+    url: https://www.skytech.co.th
+
+servers:
+  - url: https://api.skytech.co.th
+    description: Production (POC)
+
+tags:
+  - name: health
+  - name: entitlement
+  - name: voice
+  - name: speech
+  - name: binding
+  - name: wifi
+
+security:
+  - DeviceKey: []
+  - BearerDeviceKey: []
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, example: true }
+
+  /healthz:
+    get:
+      tags: [health]
+      summary: Alias of /health
+      security: []
+      responses:
+        "200":
+          description: Service is up
+
+  /v1/entitlement:
+    get:
+      tags: [entitlement]
+      summary: What this gadget may do right now
+      description: |
+        The primary source of truth. Call at boot and after any 402/403. The numbers here
+        are the same numbers `/v1/tts` uses.
+      responses:
+        "200":
+          description: Current entitlement
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Entitlement" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/device:
+    get:
+      tags: [entitlement]
+      summary: Gadget identity and owner
+      responses:
+        "200":
+          description: Device record
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  serial: { type: string }
+                  part_number: { type: string }
+                  model: { type: string }
+                  name: { type: string }
+                  product_type: { type: string, enum: [voice, vehicle] }
+                  capabilities:
+                    type: object
+                    properties:
+                      audio: { type: boolean }
+                      voice: { type: boolean }
+                      vehicle: { type: boolean }
+                  settings: { type: object, additionalProperties: true }
+                  last_seen_at: { type: string, format: date-time, nullable: true }
+                  owner_email: { type: string, nullable: true }
+                  subscription_status: { type: string }
+                  bound: { type: boolean }
+                  quota_state: { type: string }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/voice-profile:
+    get:
+      tags: [voice]
+      summary: Read the account's voice choice
+      responses:
+        "200":
+          description: Voice profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VoiceProfile" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    put:
+      tags: [voice]
+      summary: Change the voice
+      description: Requires a bound gadget (or a portal session). Unbound → 409.
+      parameters:
+        - in: header
+          name: X-Writer
+          schema: { type: string, maxLength: 40 }
+          description: Origin of the change; `muse` or `dashboard`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                voice: { type: string }
+                style: { type: string, nullable: true }
+                speed: { type: number, minimum: 0.5, maximum: 2.0 }
+                language:
+                  type: string
+                  enum: [yue, zh, en, de, es, fr, it, ja, ko, nl, pl]
+      responses:
+        "200":
+          description: Merged profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VoiceProfile" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: The gadget is not bound to an account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SimpleError" }
+
+  /v1/voices:
+    get:
+      tags: [voice]
+      summary: Voice catalogue
+      description: Cached for one hour. No device key required in the POC.
+      security: []
+      responses:
+        "200":
+          description: Catalogue
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  voices:
+                    type: array
+                    items: { $ref: "#/components/schemas/Voice" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/voices/{voice}/preview.wav:
+    get:
+      tags: [voice]
+      summary: Short sample of one voice
+      description: Unauthenticated and outside the quota.
+      security: []
+      parameters:
+        - in: path
+          name: voice
+          required: true
+          schema: { type: string, pattern: "^[A-Za-z0-9_-]{1,64}$" }
+        - in: query
+          name: speed
+          schema: { type: number, minimum: 0.5, maximum: 2.0, default: 1.12 }
+      responses:
+        "200":
+          description: WAV sample
+          content:
+            audio/wav:
+              schema: { type: string, format: binary }
+        "404":
+          description: Unknown voice
+        "422":
+          description: Invalid voice name or speed
+
+  /v1/tts:
+    post:
+      tags: [speech]
+      summary: Synthesise speech
+      description: |
+        Turns reply text into audio. Omit `voice`, `style` and `speed` to use the account's
+        profile. A 402/403 body must be treated as data — see ERRORS.md.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TtsRequest" }
+          text/plain:
+            schema: { type: string, maxLength: 2000 }
+      responses:
+        "200":
+          description: Audio bytes
+          headers:
+            X-Muse-Voice:
+              schema: { type: string }
+            X-Muse-Speed:
+              schema: { type: string }
+            X-Muse-Latency-Ms:
+              schema: { type: string }
+            X-Muse-Chars:
+              schema: { type: string }
+            X-Muse-Quota-Limit:
+              schema: { type: string }
+            X-Muse-Quota-Remaining:
+              schema: { type: string }
+            X-Muse-Quota-State:
+              schema: { type: string }
+            X-Muse-Quota-Plan:
+              schema: { type: string }
+          content:
+            audio/wav: { schema: { type: string, format: binary } }
+            audio/mpeg: { schema: { type: string, format: binary } }
+            audio/L16: { schema: { type: string, format: binary } }
+            audio/flac: { schema: { type: string, format: binary } }
+            audio/ogg: { schema: { type: string, format: binary } }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/NotEntitled"
+        "403":
+          $ref: "#/components/responses/NotEntitled"
+        "413":
+          description: Text exceeds MAX_TEXT_CHARS (2000 by default)
+        "422":
+          description: Empty text or invalid field
+        "502":
+          description: Upstream synthesis failure — retry with bounded backoff
+
+  /v1/audio/speech:
+    post:
+      tags: [speech]
+      summary: Legacy speech endpoint (OpenAI-shaped)
+      description: Same key, same quota, same 402 body as /v1/tts. New firmware should use /v1/tts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LegacySpeechRequest" }
+      responses:
+        "200":
+          description: Audio bytes
+          content:
+            audio/mpeg: { schema: { type: string, format: binary } }
+            audio/wav: { schema: { type: string, format: binary } }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/NotEntitled"
+        "403":
+          $ref: "#/components/responses/NotEntitled"
+
+  /v1/audio/speech/stream:
+    post:
+      tags: [speech]
+      summary: Legacy stream-shaped speech endpoint
+      description: |
+        Compatible path for firmware that calls a streaming endpoint. The POC returns the
+        whole clip in one body — it is not true chunked streaming.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LegacySpeechRequest" }
+      responses:
+        "200":
+          description: Audio bytes, whole clip
+          content:
+            audio/mpeg: { schema: { type: string, format: binary } }
+            audio/wav: { schema: { type: string, format: binary } }
+        "402":
+          $ref: "#/components/responses/NotEntitled"
+        "403":
+          $ref: "#/components/responses/NotEntitled"
+
+  /v1/devices/{serial}/bind-nonce:
+    post:
+      tags: [binding]
+      summary: Mint a bind nonce for the QR
+      parameters:
+        - in: path
+          name: serial
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Nonce (unbound) or a bound marker
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BindNonce" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: The key belongs to a different serial
+
+  /v1/ap-records:
+    post:
+      tags: [wifi]
+      summary: Store a Wi-Fi credential record for this gadget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ssid]
+              properties:
+                ssid: { type: string, minLength: 1, maxLength: 32 }
+                password: { type: string, maxLength: 63 }
+      responses:
+        "200":
+          description: Created record
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    get:
+      tags: [wifi]
+      summary: List this gadget's Wi-Fi credential records
+      responses:
+        "200":
+          description: Records
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/ap-records/{record_id}/credentials:
+    get:
+      tags: [wifi]
+      summary: Read one record's ssid and password
+      parameters:
+        - in: path
+          name: record_id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Credentials
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No such record for this device
+
+  /v1/ap-records/{record_id}:
+    delete:
+      tags: [wifi]
+      summary: Delete one record
+      parameters:
+        - in: path
+          name: record_id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No such record for this device
+
+components:
+  securitySchemes:
+    DeviceKey:
+      type: apiKey
+      in: header
+      name: X-Device-Key
+      description: The gadget's `mk_…` key. Preferred.
+    BearerDeviceKey:
+      type: http
+      scheme: bearer
+      description: "`Authorization: Bearer mk_…` — accepted for legacy firmware."
+
+  responses:
+    Unauthorized:
+      description: Missing, unknown or revoked device key. Terminal — do not retry.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/SimpleError" }
+    NotEntitled:
+      description: |
+        The gadget may not speak right now. `403` is used only for `not_registered`;
+        everything else is `402`. Not retryable.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Refusal" }
+
+  schemas:
+    SimpleError:
+      type: object
+      properties:
+        detail: { type: string }
+        error: { type: string }
+        message_for_user: { type: string }
+
+    VoiceProfile:
+      type: object
+      properties:
+        voice: { type: string, example: mm-en-03 }
+        style: { type: string, nullable: true }
+        speed: { type: number, example: 1.12 }
+        language: { type: string, example: en }
+        updated_at: { type: string, format: date-time, nullable: true }
+        updated_by: { type: string, enum: [dashboard, muse, factory] }
+
+    Voice:
+      type: object
+      properties:
+        name: { type: string }
+        label: { type: string }
+        language: { type: string }
+        gender: { type: string }
+        preview: { type: string }
+
+    TtsRequest:
+      type: object
+      properties:
+        text: { type: string, maxLength: 2000 }
+        input: { type: string, maxLength: 2000, description: Alias for `text` }
+        kind:
+          type: string
+          enum: [reply, notice]
+          default: reply
+          description: "`notice` draws on the reserved explanation credit."
+        voice: { type: string }
+        style: { type: string }
+        speed: { type: number, minimum: 0.5, maximum: 2.0 }
+        response_format:
+          type: string
+          enum: [wav, mp3, pcm, flac, opus]
+          default: wav
+        sample_rate:
+          type: integer
+          minimum: 8000
+          maximum: 48000
+          default: 16000
+
+    LegacySpeechRequest:
+      type: object
+      properties:
+        input: { type: string }
+        text: { type: string }
+        model: { type: string }
+        voice: { type: string }
+        style: { type: string }
+        speed: { type: number, minimum: 0.5, maximum: 2.0 }
+        response_format: { type: string, default: mp3 }
+        sample_rate: { type: integer, minimum: 8000, maximum: 48000, default: 16000 }
+
+    Quota:
+      type: object
+      properties:
+        state: { type: string, enum: [ok, notice, exhausted, none] }
+        plan: { type: string }
+        limit: { type: integer }
+        used: { type: integer }
+        remaining: { type: integer }
+        period: { type: string }
+        reset_at: { type: string, format: date-time, nullable: true }
+        reason:
+          type: string
+          nullable: true
+          enum: [not_registered, plan_quota_exceeded, subscription_expired, anon_trial_exhausted]
+
+    Bind:
+      type: object
+      description: |
+        `required` is true until the gadget is bound. When bound, `portal`,
+        `qr_endpoint` and `hint` are absent and `bound_at` is present.
+      properties:
+        required: { type: boolean }
+        portal: { type: string, format: uri }
+        qr_endpoint: { type: string }
+        hint: { type: string }
+        bound_at: { type: string, format: date-time, nullable: true }
+
+    Entitlement:
+      type: object
+      properties:
+        device:
+          type: object
+          properties:
+            id: { type: string }
+            serial: { type: string }
+            part_number: { type: string }
+            model: { type: string }
+            name: { type: string }
+            product_type: { type: string }
+            capabilities:
+              type: object
+              properties:
+                audio: { type: boolean }
+                voice: { type: boolean }
+                vehicle: { type: boolean }
+            bound: { type: boolean }
+            bound_at: { type: string, format: date-time, nullable: true }
+        user:
+          type: object
+          properties:
+            id: { type: string, nullable: true }
+            email: { type: string, nullable: true }
+        subscription:
+          type: object
+          properties:
+            status: { type: string }
+            plan: { type: string }
+            state: { type: string }
+        quota: { $ref: "#/components/schemas/Quota" }
+        entitled: { type: boolean }
+        bind: { $ref: "#/components/schemas/Bind" }
+        tts:
+          type: object
+          properties:
+            endpoint: { type: string }
+            notice_credit_chars: { type: integer }
+            notice_available: { type: boolean }
+            credential: { type: string }
+        voice_profile: { $ref: "#/components/schemas/VoiceProfile" }
+
+    BindNonce:
+      type: object
+      properties:
+        serial: { type: string }
+        bound: { type: boolean }
+        nonce: { type: string }
+        expires_at: { type: string, format: date-time }
+        url: { type: string, nullable: true }
+        qr:
+          type: object
+          properties:
+            payload: { type: string }
+
+    Refusal:
+      type: object
+      properties:
+        error: { type: string, example: quota_exceeded }
+        reason:
+          type: string
+          enum: [not_registered, plan_quota_exceeded, subscription_expired, anon_trial_exhausted]
+        serial: { type: string }
+        message_for_user: { type: string }
+        action:
+          type: object
+          properties:
+            type: { type: string, enum: [open_url, upgrade, renew] }
+            url: { type: string, format: uri }
+            label: { type: string }
+        quota:
+          type: object
+          properties:
+            used: { type: integer }
+            limit: { type: integer }
+            period: { type: string }
+            reset_at: { type: string, nullable: true }
+        emit:
+          type: object
+          properties:
+            event: { type: string, example: muse.tts_unavailable }
+            once_key: { type: string }
+        notice_credit_chars: { type: integer }
+        notice:
+          type: object
+          nullable: true
+          properties:
+            header: { type: string, example: "X-Muse-Kind: notice" }
+            chars: { type: integer }
+            text: { type: string }
+        fallback:
+          type: object
+          nullable: true
+          properties:
+            type: { type: string, example: prerendered }
+            asset: { type: string, example: tts_unavailable.wav }
+            text: { type: string }
+            reason: { type: string }
+            url: { type: string, format: uri }

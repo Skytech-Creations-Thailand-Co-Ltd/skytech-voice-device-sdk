@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# Local test output
+*.wav
+*.mp3
+*.flac
+*.ogg
+headers.txt
+body.json
+
+# Never commit credentials, even test ones
+.env
+.env.*
+*.pem
+*.key
+provision.bin
