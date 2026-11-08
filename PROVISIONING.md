@@ -53,6 +53,41 @@ re-flash boundary that breaks OTA for every board already in the field.
 
 No table change. No new partition. No per-unit build.
 
+### The partition contract
+
+Every board that ships with this SDK declares one partition for credentials. Four
+properties are fixed for the life of that board, and they are not negotiable per firmware
+version:
+
+| Property | Value |
+|---|---|
+| Name | `prod_data` |
+| Size | 4 KB (4096 B) |
+| Subtype | `0x40` |
+| Address | fixed per board, recorded in the partition table, never moved |
+
+- The address does not change when the firmware changes. A new app image must land on the
+  same table, or units already in the field silently stop seeing their own credential.
+- The firmware **never erases and never writes** this partition. It is read-only to the
+  application; the only writer is the factory / `esptool` session that programmes the unit,
+  which is why a credential survives an OTA update.
+- A board whose layout cannot keep all four properties must not claim compatibility.
+  Changing any of them is a hard re-flash boundary for every unit already shipped.
+
+### What the product registers with the platform
+
+Before the first retail batch, the product record carries the facts the server cannot
+guess:
+
+- the part number,
+- the `prod_data` address and size,
+- the **minimum firmware version that reads the blob** — an older build on a new unit boots
+  and stays mute, and the server needs this number to tell that apart from a torn blob,
+- the serials, taken from each real module's MAC (never one literal shared by a batch).
+
+**The platform never writes firmware.** Flashing is a factory or browser action against the
+physical unit. The portal's job ends at minting the device key and handing over the blob.
+
 ---
 
 ## 3. Blob format (`prod_data`, ≤ 4096 B)

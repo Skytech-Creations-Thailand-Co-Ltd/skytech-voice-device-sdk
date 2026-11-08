@@ -3,6 +3,31 @@
 Contract changes are versioned here. The version applies to the **device API contract**,
 not to any single firmware image.
 
+## 1.1.0 — 2026-11-09
+
+Adds the **firmware build checklist** and writes the product-neutral contract underneath
+it. Nothing in 1.0 is removed; endpoints, headers and status codes are unchanged.
+
+**Checklist**
+- `README.md` gains *Firmware build checklist* — eight points a build must satisfy before
+  ship: identity, a fixed `prod_data` partition, boot-time blob read, secrets in NVS only,
+  the two API doors, working without a blob, `device.info` state, factory flashing.
+
+**Provisioning**
+- `PROVISIONING.md` §2 states the partition contract (4 KB, subtype `0x40`, one address for
+  the life of the board, never written or erased by the firmware) and what a product
+  registers with the platform: part number, address and size, minimum firmware version that
+  reads the blob, and per-unit serials from the MAC.
+- `device.info`'s `provision_blob` values are now specified: `not_checked`, `no_partition`,
+  `absent`, `wrong_serial`, `adopted`, `adopted_earlier`, `nvs_error`, `key_too_long`,
+  `no_memory`, plus the `bad_*` validation failures.
+- A blob carrying another unit's serial is explicitly refused.
+
+**Scope**
+- The contract is described device-neutrally. Sections that exist only because a Muse is the
+  conversation host are marked **[MUSE PROFILE]**; everything else applies to any device.
+  New `INTEGRATION-PROFILES.md` separates standalone devices from host-driven ones.
+
 ## 1.0.0 — 2026-11-08
 
 First public release of the device integration contract.
@@ -44,3 +69,4 @@ gadgets it is compatible with. See `TRADEMARK.md`.
 - One flash session writes firmware and credentials together.
 - The Muse SDK token (`mgst_…`) is written by browser JavaScript and never reaches a
   Skytech server.
+

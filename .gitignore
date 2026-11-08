@@ -15,3 +15,6 @@ body.json
 *.pem
 *.key
 provision.bin
+
+# Local backups
+*.bak.*

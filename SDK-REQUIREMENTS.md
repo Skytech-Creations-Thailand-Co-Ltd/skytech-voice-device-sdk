@@ -1,14 +1,26 @@
-# SDK requirements — what a gadget must implement
+# SDK requirements — what a device must implement
 
-A checklist for firmware teams. Each section states the requirement, then how to satisfy
-it. Anything marked **[MUST]** is part of the contract; **[SHOULD]** is strongly recommended
-and the platform is designed around it.
+A checklist for firmware teams. Each section states the requirement, then how to satisfy it.
+
+> Short version first: the eight-point **Firmware build checklist** in
+> [`README.md`](README.md#firmware-build-checklist). This file expands each point.
+
+Two markers appear throughout:
+
+- **[ALL]** — the platform contract. True for every device that talks to
+  `api.skytech.co.th`, whatever it is.
+- **[MUSE PROFILE]** — required only when the device is driven by a Muse conversation host.
+  A standalone device skips it. See [`INTEGRATION-PROFILES.md`](INTEGRATION-PROFILES.md).
+
+Anything marked **[MUST]** is part of its profile's contract; **[SHOULD]** is strongly
+recommended and the platform is designed around it.
 
 ---
 
-## 1. Identity — the `device.info` command **[MUST]**
+## 1. Identity — the `device.info` command **[MUSE PROFILE · MUST]**
 
-The Muse calls `device.info` before it offers the user any feature. A missing or wrong
+The Muse calls `device.info` before it offers the user any feature. A standalone device has
+no caller for it and can skip this section entirely. A missing or wrong
 answer makes the agent promise things the board cannot do, so this is not optional and it
 must never fail.
 
@@ -57,10 +69,10 @@ Rules:
 - **Never log the device key.** Not at boot, not on failure, not in a hex dump. It is a
   bearer credential; a serial console is a public place.
 - **Never put the device key in a URL**, query string, QR code or analytics event.
-- **Never hand the device key to a Muse.** The Muse is the conversation; the key is the
-  device's identity.
-- Keep the Skytech API host in a **separate** NVS key from any Muse control-plane URL. A
-  Muse VM endpoint and the TTS endpoint are different services and must not overwrite each
+- **Never hand the device key to a conversation host.** The host is the conversation; the
+  key is the device's identity. That holds whether the host is a Muse or anything else.
+- Keep the Skytech API host in a **separate** NVS key from any host control-plane URL. A
+  host's VM endpoint and the TTS endpoint are different services and must not overwrite each
   other — a wrong value here silently redirects voice traffic.
 - Voice style/host fields that other subsystems read must stay non-empty. A silent
   "temporary" empty value makes the TTS task bail out and the gadget goes mute with no
@@ -84,23 +96,51 @@ Summary of what the firmware must do:
 1. Read 4 KB from `0x820000`.
 2. Validate magic, version, `body_len`, CRC32. Any failure → treat as absent, log once,
    continue boot. **Never panic.**
-3. If the blob's nonce differs from the stored one, adopt: write the key, host and (if
+3. Reject a blob whose `serial` is not this unit's own. It belongs to another board and
+   adopting it would make two units share one identity.
+4. If the blob's nonce differs from the stored one, adopt: write the key, host and (if
    present) the Muse credential into NVS.
-4. Store nonce + CRC, set the "done" flag.
-5. Do **not** erase the partition — a later re-flash must be adoptable.
+5. Store nonce + CRC, set the "done" flag.
+6. A unit with no blob and no stored key still boots, still pairs, and gives text-only
+   replies. It must not fail, hang or announce the reason.
+
+The partition itself is fixed for the life of the board — 4 KB, subtype `0x40`, one address
+recorded in the partition table. The firmware never writes it and never erases it; only the
+factory flash session does, which is what lets a credential survive an OTA. See
+[`PROVISIONING.md`](PROVISIONING.md) §2.
+
+`device.info` reports the outcome as `provision_blob`. Use these strings, so a support
+engineer reads the same word on every product:
+
+| Value | Meaning |
+|---|---|
+| `not_checked` | boot has not reached the read yet (also the very first answer) |
+| `no_partition` | `prod_data` is missing from the table — a board defect, not a user problem |
+| `absent` | partition read, no valid blob — normal for a unit provisioned over BLE or never provisioned |
+| `wrong_serial` | a blob exists but belongs to another unit, so it was refused |
+| `adopted` | blob validated and copied into NVS on this boot |
+| `adopted_earlier` | nonce already stored; the blob was skipped as a repeat |
+| `nvs_error` | the blob was valid but NVS would not open — the unit needs a re-flash |
+| `key_too_long` | the blob's key does not fit the NVS slot; a minting bug, report it |
+| `no_memory` | the read buffer could not be allocated; the device continues unprovisioned |
+
+A validation failure reports `bad_version`, `bad_length`, `bad_crc`, `bad_tlv`,
+`missing_field` or `unknown`. Every one of them behaves as absent: the device keeps running
+and stays unprovisioned.
 
 ---
 
 ## 4. Speech **[MUST]**
 
 ```text
-Muse reply text  ->  gadget  ->  POST https://api.skytech.co.th/v1/tts
-                                        |
-                                    audio bytes  ->  speaker
+reply text (from the host, or composed by the device)
+        ->  device  ->  POST https://api.skytech.co.th/v1/tts
+                              |
+                          audio bytes  ->  speaker
 ```
 
-- The gadget sends the text the Muse already produced. The platform does not generate
-  conversation, only audio.
+- The device sends text that already exists. The platform does not generate conversation,
+  only audio.
 - **Never call the TTS engine directly.** There is no provider endpoint in this contract.
   All speech goes through `/v1/tts` with the device key.
 - Omit `voice`, `style` and `speed` unless the user is actively changing them — the server
@@ -170,9 +210,9 @@ boot -> GET /v1/entitlement
 
 ---
 
-## 7. Events to the Muse **[MUST]**
+## 7. Events to the conversation host **[MUSE PROFILE · MUST]**
 
-The gadget must raise `muse.tts_unavailable` when speech is refused, carrying:
+A Muse-driven device must raise `muse.tts_unavailable` when speech is refused, carrying:
 
 ```json
 {
@@ -188,8 +228,12 @@ The gadget must raise `muse.tts_unavailable` when speech is refused, carrying:
   in support scripts and in the portal; a paraphrase creates three different stories.
 - Latch `once_key` in NVS so a reboot does not replay the notice.
 - Clear the latch when entitlement returns to `ok`, so a *future* lapse is announced again.
-- The Muse is the only party that can explain the pause inside the conversation. Sending
-  this event is what makes "why did my gadget stop answering?" answerable.
+- The host is the only party that can explain the pause inside the conversation. Sending
+  this event is what makes "why did my device stop answering?" answerable.
+
+A non-Muse host uses the same payload under its own event name and the same `once_key`
+dedupe. A standalone device has no host and skips this section — it shows or speaks
+`message_for_user` itself.
 
 ---
 
@@ -205,7 +249,7 @@ The gadget must raise `muse.tts_unavailable` when speech is refused, carrying:
 
 ---
 
-## 9. Logging and privacy **[MUST]**
+## 9. Logging and privacy **[ALL · MUST]**
 
 | Log this | Never log this |
 |---|---|
@@ -214,19 +258,26 @@ The gadget must raise `muse.tts_unavailable` when speech is refused, carrying:
 | Serial | Full reply text in production builds |
 | Firmware version, `hw_rev` | Anything that reconstructs a user's conversation |
 
-`mgst_…` is never handled by this SDK at runtime. If a build path ever touches it, it is a
-browser-side, in-memory value for the duration of the flash write — no storage, no console,
-no telemetry.
+**[MUSE PROFILE]** `mgst_…` is never handled by this SDK at runtime. If a build path ever
+touches it, it is a browser-side, in-memory value for the duration of the flash write — no
+storage, no console, no telemetry. A standalone device never sees it at all.
 
 ---
 
 ## 10. Acceptance checklist
 
-Before calling an integration done, verify each item on real hardware:
+Before calling an integration done, verify each item on real hardware. Items marked
+**[MUSE]** apply only to the Muse profile; the rest apply to every device:
 
 - [ ] `device.info` answers with the right part number, `hw_rev` and a per-unit serial
 - [ ] The same identity appears in `link.register` and the setup `device_info`
 - [ ] A freshly flashed unit adopts the blob and reports `tts_provisioned: true`
+- [ ] `device.info` reports `provision_blob`, and it flips from `absent` to `adopted` after
+      the flash session
+- [ ] A unit flashed with **no** blob boots clean, pairs, and returns text only — no panic,
+      no hang, no repeating notice
+- [ ] A blob carrying another unit's serial is refused, and the device stays unprovisioned
+- [ ] An OTA update leaves `prod_data` intact and the device still provisioned afterwards
 - [ ] The device key survives a reboot, a power cut and an OTA
 - [ ] `/v1/tts` returns audio and the gadget plays it end to end
 - [ ] A reply longer than 2000 characters is split, not truncated, and never returns `413`
